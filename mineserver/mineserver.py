@@ -22,7 +22,7 @@ def start_command(nickname, root, sleep):
     if not os.path.isfile(os.path.join(root, 'server.jar')):
         raise ValueError('Invalid root dir. Server file not found')
 
-    server_cmd = 'cd {}; java -Xmx1024M -Xms1024M -d64 -jar server.jar'.format(root)
+    server_cmd = 'cd {}; java -Xmx1024M -Xms1024M -d64 -jar server.jar nogui'.format(root)
     click.echo(server_cmd)
 
     if sleep:
