@@ -4,23 +4,55 @@ import libtmux
 import sys
 import time
 import subprocess
+import configparser
+from xdg import (XDG_CONFIG_HOME)
 
 tmux = None
+config = None
+
+def get_cfg_value(key, default=None):
+    if config and 'main' in config and key in config['main']:
+        return config['main'][key]
+    else:
+        return default
 
 @click.group()
-def cli():
+@click.option('--ini', type=click.Path(exists=True))
+def cli(ini):
     global tmux
     tmux = libtmux.Server()
     if not tmux:
         tmux = None
 
+    global config
+    config = configparser.ConfigParser()
+    cfg_file_loc = ini if ini else os.path.join(XDG_CONFIG_HOME, 'mineserver', 'init.ini')
+    if os.path.isfile(cfg_file_loc):
+        click.echo('Using config: {}'.format(cfg_file_loc))
+        config.read(cfg_file_loc)
+        for key in config['main']:
+            click.echo('{} = {}'.format(key, config['main'][key]))
+        click.echo()
+    else:
+        click.echo('Config file not found.')
+
+
 @cli.command(name='start')
-@click.argument('nickname')
-@click.argument('root', type=click.Path(exists=True))
+@click.option('--nickname', type=str)
+@click.option('--root', type=click.Path(exists=True))
 @click.option('--sleep/--no-sleep', default=True)
 def start_command(nickname, root, sleep):
+    if not nickname:
+        nickname = get_cfg_value('nickname')
+
+    if not nickname:
+        raise ValueError('Invalid nickname "{}"'.format(nickname))
+
+    if not root:
+        root = get_cfg_value('rootdir')
+
     if not os.path.isfile(os.path.join(root, 'server.jar')):
-        raise ValueError('Invalid root dir. Server file not found')
+        raise ValueError('Invalid root dir {}. Server file not found'.format(root))
 
     if sleep:
         click.echo('Starting server...')
@@ -36,25 +68,56 @@ def start_command(nickname, root, sleep):
     sys.exit(0)
 
 @cli.command(name='stop')
-@click.argument('nickname')
-@click.option('--grace', default=10)
+@click.option('--nickname', type=str)
+@click.option('--grace', type=str)
 def stop_command(nickname, grace):
+    if not nickname:
+        nickname = get_cfg_value('nickname')
+
+    if not nickname:
+        raise ValueError('Invalid nickname "{}"'.format(nickname))
+
+    if not grace:
+        grace = get_cfg_value('shutdowngraceperiod', '10')
+
+    grace_time = int(grace)
+
     if is_running(nickname):
-        stop_server(nickname, grace)
+        stop_server(nickname, grace_time)
 
 @cli.command(name='restart')
-@click.argument('nickname')
-@click.argument('root', type=click.Path(exists=True))
-@click.option('--grace', default=10)
+@click.option('--nickname', type=str)
+@click.option('--root', type=click.Path(exists=True))
+@click.option('--grace', type=str)
 @click.option('--backup/--no-backup', default=False)
 @click.option('--backupdir', type=click.Path(exists=True))
 def restart_command(nickname, root, grace, backup, backupdir):
+    if not nickname:
+        nickname = get_cfg_value('nickname')
+
+    if not nickname:
+        raise ValueError('Invalid nickname "{}".'.format(nickname))
+
+    if not root:
+        root = get_cfg_value('rootdir')
+
     if not os.path.isfile(os.path.join(root, 'server.jar')):
-        raise ValueError('Invalid root dir. Server file not found')
+        raise ValueError('Invalid root dir {}. Server file not found.'.format(root))
+
+    if backup and not backupdir:
+        backupdir = get_cfg_value('backupdir')
+
+    if backup and not os.path.isdir(backupdir):
+        raise ValueError('Invalid backup dir {}. Not a directory.'.format(backupdir))
+
+    if not grace:
+        grace = get_cfg_value('shutdowngraceperiod', '10')
+
+    grace_time = int(grace)
 
     if is_running(nickname):
-        click.echo('Stopping {}...'.format(nickname))
-        stop_server(nickname, grace)
+        click.echo('Stopping "{}"...'.format(nickname))
+        stop_server(nickname, grace_time)
 
     retries = 0
     max_retries = 10
@@ -67,21 +130,13 @@ def restart_command(nickname, root, grace, backup, backupdir):
         sys.exit(1)
 
     if backup:
-        if os.path.isdir(backupdir):
-            click.echo('Starting backup of {}...'.format(nickname))
-            fname = '{}-backup-{}.tar.7z'.format(nickname, time.strftime('%Y_%m_%d_%H%M%S', time.gmtime()))
-            archive = os.path.join(backupdir, fname)
-            result = create_backup(root, archive)
-            if result is not 0:
-                click.echo('Unable to backup.', err=True)
-                sys.exit(result)
-        elif not backupdir:
-            click.echo('Backup dir must be provided use "--backupdir".', err=True)
-            sys.exit(1)
-        else:
-            click.echo('Unable to find backup dir "{}".'.format(backupdir), err=True)
-            sys.exit(1)
-
+        click.echo('Starting backup of {}...'.format(nickname))
+        fname = '{}-backup-{}.tar.7z'.format(nickname, time.strftime('%Y_%m_%d_%H%M%S', time.gmtime()))
+        archive = os.path.join(backupdir, fname)
+        result = create_backup(root, archive)
+        if result is not 0:
+            click.echo('Unable to backup.', err=True)
+            sys.exit(result)
 
     if not start_server(root, nickname):
         click.echo('Unable to start new session', err=True)
@@ -93,18 +148,45 @@ def restart_command(nickname, root, grace, backup, backupdir):
 
 
 @cli.command(name='say')
-@click.argument('nickname')
-@click.argument('message')
-def say_command(nickname, message):
-    say(nickname, message)
+@click.argument('message', type=str)
+@click.option('--nickname', type=str)
+def say_command(message, nickname):
+    if not nickname:
+        nickname = get_cfg_value('nickname', '')
+
+    if not nickname:
+        raise ValueError('Invalid nickname {}'.format(nickname))
+
+    if is_running(nickname):
+        say(nickname, message)
+    else:
+        click.echo('Server "{}" not running, message not sent'.format(nickname))
+        sys.exit(1)
+    sys.exit(0)
 
 @cli.command(name='backup')
-@click.argument('nickname')
-@click.argument('root', type=click.Path(exists=True))
-@click.argument('backupdir', type=click.Path(exists=True))
+@click.option('--nickname', type=str)
+@click.option('--root', type=click.Path(exists=True))
+@click.option('--backupdir', type=click.Path(exists=True))
 def backup_command(nickname, root, backupdir):
+    if not nickname:
+        nickname = get_cfg_value('nickname')
+
+    if not nickname:
+        raise ValueError('Invalid nickname "{}".'.format(nickname))
+
+    if not root:
+        root = get_cfg_value('rootdir')
+
     if not os.path.isfile(os.path.join(root, 'server.jar')):
-        raise ValueError('Invalid root dir. Server file not found')
+        raise ValueError('Invalid root dir {}. Server file not found.'.format(root))
+
+    if not backupdir:
+        backupdir = get_cfg_value('backupdir')
+
+    if not os.path.isdir(backupdir):
+        raise ValueError('Invalid backup dir {}. Not a directory.'.format(backupdir))
+
     fname = '{}-backup-{}.tar.7z'.format(nickname, time.strftime('%Y_%m_%d_%H%M%S', time.gmtime()))
     archive = os.path.join(backupdir, fname)
     click.echo('Starting backup of {}...'.format(nickname))

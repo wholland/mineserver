@@ -9,7 +9,8 @@ setup(  name='mineserver',
         packages=find_packages(),
         install_requires=[
             'Click',
-            'libtmux'
+            'libtmux',
+            'xdg'
         ],
         entry_points='''
             [console_scripts]
